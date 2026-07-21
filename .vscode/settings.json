@@ -1,0 +1,12 @@
+{
+  "python.defaultInterpreterPath": "/home/zhao/miniconda3/envs/fsvae_gpu/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "terminal.integrated.env.linux": {
+    "MPLCONFIGDIR": "${workspaceFolder}/.cache/matplotlib"
+  },
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}"
+  ],
+  "python-envs.defaultEnvManager": "ms-python.python:conda",
+  "python-envs.defaultPackageManager": "ms-python.python:conda"
+}
