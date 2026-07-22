@@ -21,16 +21,24 @@ import metrics.inception_score as inception_score
 import metrics.clean_fid as clean_fid
 import metrics.autoencoder_fid as autoencoder_fid
 
+"""FSVAE/FS-CVAE 实验入口。
+
+本文件不定义网络层，负责把配置、数据、模型、损失、优化器、评估和保存
+串成完整训练流程。核心模型结构在 fsvae_models/fsvae.py。
+"""
+
 
 max_accuracy = 0
 min_loss = 1000
 
 
 def config_value(name, default):
+    """读取可选 YAML 字段，旧配置缺少该字段时使用 default。"""
     return glv.network_config.get(name, default)
 
 
 def should_run(epoch, interval, run_last=True):
+    """统一控制测试/采样/checkpoint/FID 的执行间隔；interval<=0 表示关闭。"""
     interval = int(interval)
     if interval <= 0:
         return False
@@ -65,6 +73,8 @@ def train(network, trainloader, opti, epoch):
     loss_meter = AverageMeter()
     recons_meter = AverageMeter()
     dist_meter = AverageMeter()
+    condition_meter = AverageMeter()
+    temporal_meter = AverageMeter()
 
     mean_q_z = 0
     mean_p_z = 0
@@ -78,7 +88,10 @@ def train(network, trainloader, opti, epoch):
         labels = labels.to(init_device, non_blocking=True)
         # direct spike input：不是随机脉冲编码，而是把同一张图像铺到所有时间步。
         spike_input = real_img.unsqueeze(-1).repeat(1, 1, 1, 1, n_steps) # (N,C,H,W,T)
-        x_recon, q_z, p_z, sampled_z = network(spike_input, scheduled=network_config['scheduled']) # sampled_z(B,C,1,1,T)
+        # MNIST/CIFAR 的 labels 在无条件模型中会被忽略；CelebA FS-CVAE 中
+        # labels 是 (B,40) 多属性向量，会送入 TemporalConditionEncoder。
+        condition = labels if network.condition_dim else None
+        x_recon, q_z, p_z, sampled_z = network(spike_input, condition=condition, scheduled=network_config['scheduled'])
         
         if network_config['loss_func'] == 'mmd':
             losses = network.loss_function_mmd(real_img, x_recon, q_z, p_z)
@@ -87,6 +100,7 @@ def train(network, trainloader, opti, epoch):
         else:
             raise ValueError('unrecognized loss function')
         
+        # 一次反传同时更新 SNN 主干、条件编码器、四组门控和辅助分类器。
         losses['loss'].backward()
         
         opti.step()
@@ -94,6 +108,8 @@ def train(network, trainloader, opti, epoch):
         loss_meter.update(losses['loss'].detach().cpu().item())
         recons_meter.update(losses['Reconstruction_Loss'].detach().cpu().item())
         dist_meter.update(losses['Distance_Loss'].detach().cpu().item())
+        condition_meter.update(losses.get('Condition_Loss', torch.tensor(0.)).detach().cpu().item())
+        temporal_meter.update(losses.get('Temporal_Loss', torch.tensor(0.)).detach().cpu().item())
 
         mean_q_z = (q_z.mean(0).detach().cpu() + batch_idx * mean_q_z) / (batch_idx+1) # (C,k,T)
         mean_p_z = (p_z.mean(0).detach().cpu() + batch_idx * mean_p_z) / (batch_idx+1) # (C,k,T)
@@ -112,6 +128,9 @@ def train(network, trainloader, opti, epoch):
     writer.add_scalar('Train/loss', loss_meter.avg, epoch)
     writer.add_scalar('Train/recons_loss', recons_meter.avg, epoch)
     writer.add_scalar('Train/distance', dist_meter.avg, epoch)
+    writer.add_scalar('Train/condition_consistency', condition_meter.avg, epoch)
+    writer.add_scalar('Train/temporal_alignment', temporal_meter.avg, epoch)
+    writer.add_scalar('Train/latent_firing_rate', mean_sampled_z.mean().item(), epoch)
     writer.add_scalar('Train/mean_q', mean_q_z.mean().item(), epoch)
     writer.add_scalar('Train/mean_p', mean_p_z.mean().item(), epoch)
     
@@ -121,6 +140,11 @@ def train(network, trainloader, opti, epoch):
     mean_p_z = mean_p_z.permute(1,0,2) # (k,C,T)
     writer.add_image(f'Train/mean_q_z', mean_q_z.mean(0).unsqueeze(0))
     writer.add_image(f'Train/mean_p_z', mean_p_z.mean(0).unsqueeze(0))
+    # 每条曲线有 T 个点，可检查门值是否随时间变化或退化为常数。
+    for gate_name, gate_by_time in network.condition_gate_means().items():
+        for time_index, gate_value in enumerate(gate_by_time):
+            writer.add_scalar(f'Train/condition_gate_{gate_name}/t{time_index}',
+                              gate_value.item(), epoch)
 
     return loss_meter.avg
 
@@ -133,11 +157,15 @@ def test(network, testloader, epoch):
     loss_meter = AverageMeter()
     recons_meter = AverageMeter()
     dist_meter = AverageMeter()
+    condition_meter = AverageMeter()
+    temporal_meter = AverageMeter()
 
     mean_q_z = 0
     mean_p_z = 0
     mean_sampled_z = 0
 
+    # hook 统计常规 Linear/Conv/LIF 操作；门控中的逐元素 sigmoid/乘加尚未
+    # 完整计入，因此若做严格能耗论文实验还需要扩展 CountMulAddSNN。
     count_mul_add, hook_handles = add_hook(net)
 
     network = network.eval()
@@ -148,7 +176,8 @@ def test(network, testloader, epoch):
             # direct spike input
             spike_input = real_img.unsqueeze(-1).repeat(1, 1, 1, 1, n_steps) # (N,C,H,W,T)
 
-            x_recon, q_z, p_z, sampled_z = network(spike_input, scheduled=network_config['scheduled'])
+            condition = labels if network.condition_dim else None
+            x_recon, q_z, p_z, sampled_z = network(spike_input, condition=condition, scheduled=network_config['scheduled'])
 
             if network_config['loss_func'] == 'mmd':
                 losses = network.loss_function_mmd(real_img, x_recon, q_z, p_z)
@@ -164,6 +193,8 @@ def test(network, testloader, epoch):
             loss_meter.update(losses['loss'].detach().cpu().item())
             recons_meter.update(losses['Reconstruction_Loss'].detach().cpu().item())
             dist_meter.update(losses['Distance_Loss'].detach().cpu().item())
+            condition_meter.update(losses.get('Condition_Loss', torch.tensor(0.)).detach().cpu().item())
+            temporal_meter.update(losses.get('Temporal_Loss', torch.tensor(0.)).detach().cpu().item())
 
             print(f'Test[{epoch}/{max_epoch}] [{batch_idx}/{len(testloader)}] Loss: {loss_meter.avg}, RECONS: {recons_meter.avg}, DISTANCE: {dist_meter.avg}')
 
@@ -179,6 +210,9 @@ def test(network, testloader, epoch):
     writer.add_scalar('Test/loss', loss_meter.avg, epoch)
     writer.add_scalar('Test/recons_loss', recons_meter.avg, epoch)
     writer.add_scalar('Test/distance', dist_meter.avg, epoch)
+    writer.add_scalar('Test/condition_consistency', condition_meter.avg, epoch)
+    writer.add_scalar('Test/temporal_alignment', temporal_meter.avg, epoch)
+    writer.add_scalar('Test/latent_firing_rate', mean_sampled_z.mean().item(), epoch)
     writer.add_scalar('Test/mean_q', mean_q_z.mean().item(), epoch)
     writer.add_scalar('Test/mean_p', mean_p_z.mean().item(), epoch)
     writer.add_scalar('Test/mul', count_mul_add.mul_sum.item() / len(testloader), epoch)
@@ -195,11 +229,15 @@ def test(network, testloader, epoch):
 
     return loss_meter.avg
 
-def sample(network, epoch, batch_size=128):
+def sample(network, epoch, batch_size=128, condition=None):
     # 从先验 p(z_t | z_<t) 自回归采样潜变量，再经解码器生成图像。
     network = network.eval()
     with torch.no_grad():
-        sampled_x, sampled_z = network.sample(batch_size)
+        # FSCVAE 使用测试集真实属性组合，避免独立随机 40 bit 产生冲突条件。
+        if condition is not None:
+            condition = condition[:batch_size].to(init_device, non_blocking=True)
+            batch_size = condition.shape[0]
+        sampled_x, sampled_z = network.sample(batch_size, condition=condition)
         writer.add_images('Sample/sample_img', (sampled_x+1)/2, epoch)
         writer.add_image('Sample/mean_sampled_z', sampled_z.mean(0).unsqueeze(0), epoch)
         os.makedirs(f'checkpoint/{args.name}/imgs/sample/', exist_ok=True)
@@ -244,6 +282,8 @@ def calc_autoencoder_frechet_distance(network, epoch):
 
 
 if __name__ == '__main__':
+    # 示例：python main_fsvae.py celeba_fscvae \
+    #          -config NetworkConfigs/CelebA_CVAE.yaml -device 0
     parser = argparse.ArgumentParser()
     parser.add_argument('name', type=str)
     parser.add_argument('-config', action='store', dest='config', help='The path of config file')
@@ -259,6 +299,7 @@ if __name__ == '__main__':
     if args.config is None:
         raise Exception('Unrecognized config file.')
 
+    # 当前训练脚本明确要求 CUDA；demo.py 另外支持 CPU 推理。
     if args.device is None:
         init_device = torch.device("cuda:0")
     else:
@@ -311,6 +352,12 @@ if __name__ == '__main__':
         raise Exception('Unrecognized dataset name.')
     logging.info("dataset loaded")
 
+    # 为可视化采样缓存一个测试 batch 的真实相关属性组合。这里只缓存标签，
+    # 不会把测试图片送入生成路径。
+    sample_conditions = None
+    if network_config.get('conditional', False):
+        _, sample_conditions = next(iter(test_loader))
+
     if network_config['model'] == 'FSVAE':
         net = fsvae.FSVAE()
     elif network_config['model'] == 'FSVAE_large':
@@ -320,6 +367,8 @@ if __name__ == '__main__':
 
     net = net.to(init_device)
     
+    # checkpoint 只保存 state_dict，不含 optimizer/epoch，因此这里适合加载
+    # 同结构模型权重，但不能完整恢复 AdamW 动量和训练轮数。
     if args.checkpoint is not None:
         checkpoint_path = args.checkpoint
         checkpoint = torch.load(checkpoint_path)
@@ -330,6 +379,8 @@ if __name__ == '__main__':
                                 weight_decay=0.001)
     
     best_loss = 1e8
+    # 每个 epoch 的顺序：可选权重直方图 -> scheduled p -> train -> test
+    # -> 保存 -> 条件采样 -> 可选昂贵生成指标。
     for e in range(glv.network_config['epochs']):
         
         if should_run(e, config_value('weight_hist_interval', 1)):
@@ -350,7 +401,8 @@ if __name__ == '__main__':
             torch.save(net.state_dict(), f'checkpoint/{args.name}/checkpoint.pth')
 
         if should_run(e, config_value('sample_interval', 1)):
-            sample(net, e, batch_size=config_value('sample_batch_size', 128))
+            sample(net, e, batch_size=config_value('sample_batch_size', 128),
+                   condition=sample_conditions)
 
         if should_run(e, config_value('metric_interval', 1)):
             if config_value('enable_inception_score', True):

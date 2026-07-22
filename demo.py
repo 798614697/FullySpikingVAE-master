@@ -12,6 +12,12 @@ import metrics.inception_score as inception_score
 import metrics.clean_fid as clean_fid
 import metrics.autoencoder_fid as autoencoder_fid
 
+"""加载项目自带的无条件 CelebA FSVAE 权重进行重建、采样和可选指标计算。
+
+该脚本的内置配置没有 conditional=true，因此用于验证原始 FSVAE；训练新的
+FS-CVAE 应使用 main_fsvae.py 和 NetworkConfigs/CelebA_CVAE*.yaml。
+"""
+
 def test_sample(network, testloader):
     n_steps = glv.network_config['n_steps']
 

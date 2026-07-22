@@ -1,0 +1,35 @@
+Network:
+  # 数据与基础 FSVAE 结构；公平对比时应与 CelebA.yaml 保持一致。
+  epochs: 150
+  batch_size: 250
+  n_steps: 16
+  dataset: "CelebA"
+  in_channels: 3
+  data_path: "./data"
+  lr: 0.001
+  latent_dim: 128
+  input_size: 64
+  model: "FSVAE_large"
+  # FS-CVAE 条件分支：40 个静态属性先编码成 64xT 条件脉冲。
+  conditional: true
+  condition_dim: 40 # CelebA 全部二值属性
+  condition_embed_dim: 64 # 条件 LIF 神经元数，不是 CelebA 属性数
+  temporal_condition_mode: 'lif' # lif=提出方法；static=无时间动态消融
+  injection_type: 'temporal_gate' # temporal_gate=软选择门；additive=始终开门
+  k: 20
+  scheduled: true
+  loss_func: 'mmd'
+  # L = L_rec + lambda_cond*L_dist + lambda_cc*L_CC + lambda_temp*L_temp
+  lambda_cond: 1.0 # MMD 权重；若改 KLD 通常应显著调小
+  lambda_cc: 0.1 # CelebA 属性一致性
+  lambda_temp: 0.1 # 条件-潜变量时间对齐
+
+  test_interval: 5
+  sample_interval: 5
+  checkpoint_interval: 5
+  weight_hist_interval: 0
+  metric_interval: 0
+  sample_batch_size: 64
+  enable_inception_score: false
+  enable_autoencoder_fid: false
+  enable_clean_fid: false

@@ -12,6 +12,12 @@ from PIL import Image
 import ann_models.ann_ae as ann_ae
 from datasets import load_dataset_ann
 
+"""在项目训练好的自编码器特征空间中计算 Frechet 距离。
+
+metrics/stat_checkpoints 下的 pth 是特征提取器权重，不是 FSVAE checkpoint；
+metrics/stats 下的 npz 是真实数据特征均值和协方差。
+"""
+
 
 def get_autoencoder_frechet_distance(model, dataset, device, num_gen=5000):
     def sample_from_vae(batch_size):
@@ -35,6 +41,7 @@ def get_autoencoder_frechet_distance_ann(model, dataset, device, num_gen=5000):
 
 def compute_autoencoder_frechet_distance(gen, dataset_name, num_gen=5000, batch_size=256, 
                                         device=torch.device("cuda")):
+    """提取生成图特征，并与预计算真实分布做高斯 Frechet 距离。"""
     if dataset_name.lower() == 'mnist':     
         in_channels = 1 
         latent_dim=64

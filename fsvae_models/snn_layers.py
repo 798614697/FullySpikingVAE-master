@@ -4,6 +4,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 import global_v as glv
 
+"""FSVAE 使用的基础时域 SNN 层。
+
+全项目统一把时间 T 放在最后一维。tdLinear/tdConv 对每个时间步共享同一组
+权重；真正的跨时间记忆来自 LIF 膜电位，而不是时间卷积核。
+"""
+
 dt = 5
 a = 0.25
 aa = 0.5  
@@ -19,6 +25,7 @@ class SpikeAct(torch.autograd.Function):
     def forward(ctx, input):
         ctx.save_for_backward(input)
         # if input = u > Vth then output = 1
+        # 前向是不可导的硬阈值事件：膜电位超过 0.2 才输出 spike=1。
         output = torch.gt(input, Vth) 
         return output.float()
 
@@ -26,7 +33,8 @@ class SpikeAct(torch.autograd.Function):
     def backward(ctx, grad_output):
         input, = ctx.saved_tensors 
         grad_input = grad_output.clone()
-        # surrogate gradient：只在阈值附近的小窗口内传递近似梯度。
+        # surrogate gradient：只在阈值附近的小窗口内传递近似梯度；这是
+        # STBP 能训练离散脉冲神经元的关键。
         hu = abs(input) < aa
         hu = hu.float() / (2 * aa)
         return grad_input * hu
@@ -43,16 +51,19 @@ class LIFSpike(nn.Module):
         nsteps = x.shape[-1]
         u   = torch.zeros(x.shape[:-1] , device=x.device)
         out = torch.zeros(x.shape, device=x.device)
+        # 必须显式按时间循环，因为 u_t 依赖 u_(t-1) 和上一时刻输出。
         for step in range(nsteps):
             u, out[..., step] = self.state_update(u, out[..., max(step-1, 0)], x[..., step])
         return out
     
     def state_update(self, u_t_n1, o_t_n1, W_mul_o_t1_n, tau=tau):
+        # u_t = tau*u_(t-1)*(1-o_(t-1)) + input_t；放电后通过乘零软复位。
         u_t1_n1 = tau * u_t_n1 * (1 - o_t_n1) + W_mul_o_t1_n
         o_t1_n1 = SpikeAct.apply(u_t1_n1)
         return u_t1_n1, o_t1_n1  
 
 class tdLinear(nn.Linear):
+    """对 (B,C,T) 的每个时间步应用同一个 nn.Linear。"""
     def __init__(self, 
                 in_features,
                 out_features,
@@ -86,6 +97,11 @@ class tdLinear(nn.Linear):
         return y
 
 class tdConv(nn.Conv3d):
+    """对 (B,C,H,W,T) 做空间卷积，时间核恒为 1。
+
+    Conv3d 只被用作处理额外时间维的工程实现；kernel=(kh,kw,1)，所以
+    不会在卷积中混合不同时间步，时间依赖仍由后接 LIF 建立。
+    """
     def __init__(self, 
                 in_channels, 
                 out_channels,  
@@ -150,6 +166,7 @@ class tdConv(nn.Conv3d):
         
 
 class tdConvTranspose(nn.ConvTranspose3d):
+    """tdConv 的空间上采样对应层，同样保持时间长度 T 不变。"""
     def __init__(self, 
                 in_channels, 
                 out_channels,  
@@ -273,6 +290,7 @@ class tdBatchNorm(nn.BatchNorm2d):
 
 
 class PSP(torch.nn.Module):
+    """一阶突触后电位滤波器，用于比较 q/p 的时间脉冲响应而非孤立 bit。"""
     def __init__(self):
         super().__init__()
         self.tau_s = 2
@@ -303,6 +321,8 @@ class MembraneOutputLayer(nn.Module):
         n_steps = glv.n_steps
 
         arr = torch.arange(n_steps-1,-1,-1)
+        # 越靠后的时间步权重越大；register_buffer 让系数随模型迁移设备，
+        # 但不作为可训练参数进入优化器。
         self.register_buffer("coef", torch.pow(0.8, arr)[None,None,None,None,:]) # (1,1,1,1,T)
 
     def forward(self, x):

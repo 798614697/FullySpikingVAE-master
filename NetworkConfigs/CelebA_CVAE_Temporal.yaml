@@ -1,0 +1,33 @@
+Network:
+  # 消融 Model 2：启用 LIF 时间条件和软门控，但关闭两项提出损失。
+  # 与 Latent 配置比较时间机制，与完整 CVAE 配置比较新损失。
+  epochs: 150
+  batch_size: 250
+  n_steps: 16
+  dataset: "CelebA"
+  in_channels: 3
+  data_path: "./data"
+  lr: 0.001
+  latent_dim: 128
+  input_size: 64
+  model: "FSVAE_large"
+  conditional: true
+  condition_dim: 40
+  condition_embed_dim: 64
+  temporal_condition_mode: 'lif'
+  injection_type: 'temporal_gate'
+  k: 20
+  scheduled: true
+  loss_func: 'mmd'
+  lambda_cond: 1.0
+  lambda_cc: 0.0
+  lambda_temp: 0.0
+  test_interval: 5
+  sample_interval: 5
+  checkpoint_interval: 5
+  weight_hist_interval: 0
+  metric_interval: 0
+  sample_batch_size: 64
+  enable_inception_score: false
+  enable_autoencoder_fid: false
+  enable_clean_fid: false

@@ -9,7 +9,13 @@ import numpy as np
 from scipy.stats import entropy
 from tqdm import tqdm
 
+"""Inception Score：评价生成样本类别置信度和总体多样性，值通常越高越好。
+
+CelebA 并非 ImageNet 分类数据，IS 的解释力有限，应结合 FID 和属性准确率。
+"""
+
 def get_inception_score(model, device=torch.device("cuda:0"), batch_size=256, batch_times=8):
+    """把 FSVAE.sample 包装为通用图像生成函数。"""
     # function that accepts a latent and returns an image in range[0,255]
     def sample_from_vae(batch_size):
         sampled_x, _ = model.sample(batch_size)
@@ -44,7 +50,7 @@ def calc_inception_score(img_generator, device=torch.device("cuda:0"), resize=Tr
     batch_size -- batch size for feeding into Inception v3
     splits -- number of splits
     """
-    # Load inception model
+    # Inception-v3 需要 299x299 RGB；灰度图已在上层复制成三通道。
     inception_model = inception_v3(pretrained=True, transform_input=False).to(device)
     inception_model.eval()
     up = nn.Upsample(size=(299, 299), mode='bilinear').to(device)

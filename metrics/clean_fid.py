@@ -1,6 +1,13 @@
 from cleanfid import fid
 
+"""用 clean-fid 比较生成图分布和项目预先注册的真实数据统计。
+
+FS-CVAE 调用 model.sample 时若未显式给 y，会走随机属性兼容路径；严格的
+条件生成评价应另外按真实属性分布采样，并增加属性一致率。
+"""
+
 def get_clean_fid_score(model, dataset, device, num_gen=5000):
+    """适配 SNN 模型的 clean-fid 入口；返回值越低通常表示分布越接近。"""
     if dataset.lower() == "mnist":
         dataset_name = 'mnist_test'
     elif dataset.lower() == "fashionmnist":
@@ -12,7 +19,8 @@ def get_clean_fid_score(model, dataset, device, num_gen=5000):
     else:
         raise ValueError()
 
-    # function that accepts a latent and returns an image in range[0,255]
+    # clean-fid 要求一个接收 dummy latent 的生成器；FSVAE 自己从 prior 采样，
+    # 因此这里只使用 z.shape[0] 获取所需 batch size。
     def sample_from_vae(z):
         """
         z : dummy latent value (batch_size, z_dim)

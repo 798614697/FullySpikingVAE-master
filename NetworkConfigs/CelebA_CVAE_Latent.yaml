@@ -1,0 +1,33 @@
+Network:
+  # 消融 Model 1：条件经过可学习投影，但不产生 LIF 时间动态，门始终开启。
+  # 与 CelebA.yaml 比较说明“加入条件”本身的作用。
+  epochs: 150
+  batch_size: 250
+  n_steps: 16
+  dataset: "CelebA"
+  in_channels: 3
+  data_path: "./data"
+  lr: 0.001
+  latent_dim: 128
+  input_size: 64
+  model: "FSVAE_large"
+  conditional: true
+  condition_dim: 40
+  condition_embed_dim: 64
+  temporal_condition_mode: 'static' # 同一个投影条件复制到 T 步
+  injection_type: 'additive' # gate=1，无时间选择性
+  k: 20
+  scheduled: true
+  loss_func: 'mmd'
+  lambda_cond: 1.0
+  lambda_cc: 0.0 # 关闭提出的条件一致性损失
+  lambda_temp: 0.0 # 关闭提出的时间对齐损失
+  test_interval: 5
+  sample_interval: 5
+  checkpoint_interval: 5
+  weight_hist_interval: 0
+  metric_interval: 0
+  sample_batch_size: 64
+  enable_inception_score: false
+  enable_autoencoder_fid: false
+  enable_clean_fid: false

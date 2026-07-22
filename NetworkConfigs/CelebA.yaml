@@ -1,4 +1,6 @@
 Network:
+  # 原始无条件 FSVAE baseline；没有 conditional/condition_dim 字段时，
+  # fsvae.py 自动令 condition_dim=0，不创建任何条件模块。
   epochs: 150
   batch_size: 250
   n_steps: 16 # timestep

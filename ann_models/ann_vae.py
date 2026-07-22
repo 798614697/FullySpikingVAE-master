@@ -3,7 +3,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+"""普通非脉冲 VAE 对照模型。
+
+它使用高斯潜变量、重参数化技巧和 Conv2d，不参与 FS-CVAE 主训练；保留它
+是为了与 ANN 生成模型进行重建、FID 或计算量对照。
+"""
+
 class VanillaVAE(nn.Module):
+    """适用于 32x32 输入的四层高斯 VAE。"""
     def __init__(self, in_channels, latent_dim) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -152,6 +159,7 @@ class VanillaVAE(nn.Module):
         return samples
 
 class VanillaVAELarge(VanillaVAE):
+    """适用于 64x64 CelebA 的五层 ANN-VAE。"""
     def __init__(self, in_channels, latent_dim) -> None:
         super(VanillaVAE, self).__init__()
         self.in_channels = in_channels

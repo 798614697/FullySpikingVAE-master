@@ -5,6 +5,8 @@ import torch
 import matplotlib.pyplot as plt
 import fsvae_models.snn_layers as snn_layers
 
+"""训练辅助工具：滑动均值、CUDA 信息以及 ANN/SNN 粗略计算量统计。"""
+
 try:
     cuda = importlib.import_module("pycuda.driver")
     importlib.import_module("pycuda.autoinit")  # Necessary for using pycuda functions
@@ -13,7 +15,7 @@ except ImportError:
 
 
 class AverageMeter(object):
-    """Computes and stores the average and current value"""
+    """累计一个 epoch 内的当前值、总和、样本数和平均值。"""
     def __init__(self):
         self.reset()
 
@@ -84,6 +86,7 @@ class aboutCudaDevices():
         return string
 
 class CountMulAddANN:
+    """作为 forward hook 粗略估算普通 ANN 层的乘法和加法次数。"""
     def __init__(self) -> None:
         self.mul_sum = 0
         self.add_sum = 0
@@ -123,6 +126,11 @@ class CountMulAddANN:
         self.add_sum = 0
 
 class CountMulAddSNN:
+    """根据输入脉冲稀疏度粗略统计 SNN 的乘/加操作。
+
+    第一层接收实值图像，按普通乘加计算；后续层输入近似二值脉冲，权重乘
+    spike 可映射成事件累加，因此主要记 add。该统计是估算，不等于硬件能耗。
+    """
     def __init__(self) -> None:
         self.mul_sum = 0
         self.add_sum = 0

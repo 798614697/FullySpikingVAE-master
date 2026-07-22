@@ -38,6 +38,26 @@ python demo.py --sample-only --skip-metrics
 python main_fsvae exp_name -config NetworkConfigs/dataset_name.yaml
 ```
 
+To train the conditional FSVAE on CelebA, using all 40 CelebA attributes as the
+condition for the posterior, autoregressive prior, and decoder, run:
+
+```bash
+python main_fsvae.py celeba_cvae -config NetworkConfigs/CelebA_CVAE.yaml
+```
+
+The FS-CVAE condition is not concatenated with every time step. A recurrent LIF
+condition encoder produces condition spikes `c_1:T`; time-selective gates then
+modulate the encoder current, posterior, conditional prior, and decoder. The
+three ablation configurations are:
+
+- `CelebA_CVAE_Latent.yaml`: static projected condition, no proposed losses.
+- `CelebA_CVAE_Temporal.yaml`: LIF temporal encoding and gates, no proposed losses.
+- `CelebA_CVAE.yaml`: temporal model plus consistency/alignment losses.
+
+`NetworkConfigs/CelebA.yaml` remains the original unconditional baseline. The
+conditional model adds encoder/gate/loss-head parameters, so an unconditional
+checkpoint cannot be loaded into it with strict state-dict loading.
+
 Training settings are defined in `NetworkConfigs/*.yaml`.
 
 args:
