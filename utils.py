@@ -157,8 +157,10 @@ class CountMulAddSNN:
                         mul = 0
                 elif isinstance(module, torch.nn.Linear):
                     add = module_in.sum() * module.out_features
-                    s = module_out.shape # (N,C,T)
-                    add += s[0] * s[1] * s[2]
+                    # Linear 保留输入的所有前导维度，因此既可能用于
+                    # (N,C,T) 脉冲序列，也可能用于条件编码器中的 (N,C)。
+                    # bias 对每个输出元素执行一次加法，不能写死为三维。
+                    add += module_out.numel()
                     mul = 0
                 elif isinstance(module, torch.nn.ConvTranspose3d):
                     add = module_in.sum() * module.kernel_size[0] * module.kernel_size[1] * module.out_channels * module.stride[0]*module.stride[1]
