@@ -65,6 +65,139 @@ def write_weight_hist(net, index):
         root, name = os.path.splitext(n)
         writer.add_histogram(root + '/' + name, m, index)
 
+
+def normalized_attributes(labels, device, dtype):
+    """统一 CelebA 的 {-1,1}/{0,1} 属性格式。"""
+    return (labels.to(device=device, dtype=dtype, non_blocking=True) > 0).to(dtype)
+
+
+def evaluate_condition_classifier(network, dataloader):
+    """在真实图像上评估多标签 BCE 和逐标签平均准确率。"""
+    classifier = network.condition_classifier
+    classifier.eval()
+    loss_meter = AverageMeter()
+    correct = 0
+    count = 0
+    with torch.no_grad():
+        for images, labels in dataloader:
+            images = images.to(init_device, non_blocking=True)
+            labels = normalized_attributes(labels, init_device, images.dtype)
+            logits = classifier(images)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+            loss_meter.update(loss.item(), images.shape[0])
+            correct += ((logits > 0) == labels.bool()).sum().item()
+            count += labels.numel()
+    return loss_meter.avg, correct / max(count, 1)
+
+
+def classifier_pos_weight(trainloader, device):
+    """按 CelebA 训练集频率计算逐属性 neg/pos 权重，缓解标签不平衡。"""
+    attributes = getattr(trainloader.dataset, 'attr', None)
+    if attributes is None:
+        return None
+    attributes = (attributes > 0).float()
+    positives = attributes.sum(dim=0)
+    negatives = attributes.shape[0] - positives
+    max_weight = float(config_value('classifier_pos_weight_max', 10.0))
+    return (negatives / positives.clamp_min(1.0)).clamp(max=max_weight).to(device)
+
+
+def pretrain_condition_classifier(network, trainloader, testloader):
+    """只用真实图像预训练属性分类器，保存验证 BCE 最优权重。"""
+    classifier = network.condition_classifier
+    epochs = int(config_value('classifier_pretrain_epochs', 0))
+    checkpoint_path = config_value(
+        'classifier_checkpoint',
+        f'checkpoint/{args.name}/condition_classifier.pth',
+    )
+
+    if checkpoint_path and os.path.isfile(checkpoint_path):
+        state = torch.load(checkpoint_path, map_location=init_device)
+        classifier.load_state_dict(state)
+        print(f'Loaded pretrained condition classifier: {checkpoint_path}')
+        logging.info(f'loaded condition classifier from {checkpoint_path}')
+        network.freeze_condition_classifier()
+        return
+
+    if epochs <= 0:
+        raise ValueError(
+            'lambda_cc > 0 requires a pretrained classifier: set '
+            'classifier_pretrain_epochs > 0 or provide classifier_checkpoint'
+        )
+
+    optimizer = torch.optim.AdamW(
+        classifier.parameters(),
+        lr=float(config_value('classifier_lr', 2e-4)),
+        betas=(0.9, 0.999),
+        weight_decay=float(config_value('classifier_weight_decay', 1e-4)),
+    )
+    pos_weight = classifier_pos_weight(trainloader, init_device)
+    best_val_loss = float('inf')
+    os.makedirs(os.path.dirname(checkpoint_path) or '.', exist_ok=True)
+
+    for epoch in range(epochs):
+        classifier.train()
+        train_loss = AverageMeter()
+        for images, labels in trainloader:
+            images = images.to(init_device, non_blocking=True)
+            labels = normalized_attributes(labels, init_device, images.dtype)
+            optimizer.zero_grad()
+            logits = classifier(images)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                logits, labels, pos_weight=pos_weight
+            )
+            loss.backward()
+            optimizer.step()
+            train_loss.update(loss.item(), images.shape[0])
+
+        val_loss, val_accuracy = evaluate_condition_classifier(network, testloader)
+        writer.add_scalar('Classifier/train_bce', train_loss.avg, epoch)
+        writer.add_scalar('Classifier/val_bce', val_loss, epoch)
+        writer.add_scalar('Classifier/val_attribute_accuracy', val_accuracy, epoch)
+        print(
+            f'Classifier[{epoch + 1}/{epochs}] train BCE: {train_loss.avg:.5f}, '
+            f'val BCE: {val_loss:.5f}, attribute accuracy: {val_accuracy:.4f}'
+        )
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(classifier.state_dict(), checkpoint_path)
+
+    classifier.load_state_dict(torch.load(checkpoint_path, map_location=init_device))
+    network.freeze_condition_classifier()
+    logging.info(f'pretrained and froze condition classifier: {checkpoint_path}')
+
+
+def warmup_weight(epoch, target, start_epoch, warmup_epochs):
+    """从 start_epoch 起将权重由 0 线性增加到 target。"""
+    target = float(target)
+    start_epoch = int(start_epoch)
+    warmup_epochs = int(warmup_epochs)
+    if epoch < start_epoch:
+        return 0.0
+    if warmup_epochs <= 0:
+        return target
+    progress = min(1.0, (epoch - start_epoch + 1) / warmup_epochs)
+    return target * progress
+
+
+def update_conditional_loss_weights(network, epoch):
+    cc_weight = warmup_weight(
+        epoch,
+        config_value('lambda_cc', 0.0),
+        config_value('cc_start_epoch', 0),
+        config_value('cc_warmup_epochs', 0),
+    )
+    temp_weight = warmup_weight(
+        epoch,
+        config_value('lambda_temp', 0.0),
+        config_value('temp_start_epoch', 0),
+        config_value('temp_warmup_epochs', 0),
+    )
+    network.set_conditional_loss_weights(cc_weight, temp_weight)
+    writer.add_scalar('Train/lambda_cc_effective', cc_weight, epoch)
+    writer.add_scalar('Train/lambda_temp_effective', temp_weight, epoch)
+    return cc_weight, temp_weight
+
 def train(network, trainloader, opti, epoch):
     # FSVAE 的训练循环：静态图像会被复制到 T 个时间步，形成 (N,C,H,W,T)。
     n_steps = glv.network_config['n_steps']
@@ -81,6 +214,11 @@ def train(network, trainloader, opti, epoch):
     mean_sampled_z = 0
 
     network = network.train()
+    # network.train() 会递归切换子模块；冻结分类器应始终保持评估模式。
+    if (network.condition_classifier is not None
+            and not any(parameter.requires_grad
+                        for parameter in network.condition_classifier.parameters())):
+        network.condition_classifier.eval()
     
     for batch_idx, (real_img, labels) in enumerate(trainloader):   
         opti.zero_grad()
@@ -100,7 +238,7 @@ def train(network, trainloader, opti, epoch):
         else:
             raise ValueError('unrecognized loss function')
         
-        # 一次反传同时更新 SNN 主干、条件编码器、四组门控和辅助分类器。
+        # 属性分类器已冻结；梯度穿过分类器输入回到生成主干，但不更新分类器。
         losses['loss'].backward()
         
         opti.step()
@@ -373,7 +511,14 @@ if __name__ == '__main__':
         checkpoint_path = args.checkpoint
         checkpoint = torch.load(checkpoint_path)
         net.load_state_dict(checkpoint)    
-    optimizer = torch.optim.AdamW(net.parameters(), 
+
+    if net.condition_dim and float(config_value('lambda_cc', 0.0)) > 0:
+        pretrain_condition_classifier(net, train_loader, test_loader)
+
+    # 冻结参数不交给主优化器，避免无意义的优化器状态和权重衰减。
+    trainable_parameters = [parameter for parameter in net.parameters()
+                            if parameter.requires_grad]
+    optimizer = torch.optim.AdamW(trainable_parameters,
                                 lr=glv.network_config['lr'], 
                                 betas=(0.9, 0.999), 
                                 weight_decay=0.001)
@@ -382,6 +527,9 @@ if __name__ == '__main__':
     # 每个 epoch 的顺序：可选权重直方图 -> scheduled p -> train -> test
     # -> 保存 -> 条件采样 -> 可选昂贵生成指标。
     for e in range(glv.network_config['epochs']):
+        cc_weight, temp_weight = update_conditional_loss_weights(net, e)
+        print(f'Conditional weights: lambda_cc={cc_weight:.5f}, '
+              f'lambda_temp={temp_weight:.5f}')
         
         if should_run(e, config_value('weight_hist_interval', 1)):
             write_weight_hist(net, e)

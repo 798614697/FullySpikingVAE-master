@@ -33,15 +33,15 @@ class TemporalConditionGate(nn.Module):
     def forward(self, features, condition_sequence):
         if condition_sequence is None:
             self.last_gate = None
-            return features
+            return features#无条件直接返回
         if features.ndim != 3 or condition_sequence.ndim != 3:
-            raise ValueError('features and condition_sequence must be (B,C,T)')
+            raise ValueError('features and condition_sequence must be (B,C,T)')#输入形状检查
         if features.shape[0] != condition_sequence.shape[0]:
             raise ValueError('feature and condition batch sizes differ')
 
-        steps = features.shape[-1]
+        steps = features.shape[-1]#对齐时间长度
         condition_sequence = condition_sequence[..., :steps]
-        condition_current = self._time_linear(
+        condition_current = self._time_linear(#计算条件电流
             self.condition_projection, condition_sequence
         )
 #计算gate值
@@ -54,10 +54,10 @@ class TemporalConditionGate(nn.Module):
             gate = torch.sigmoid(
                 self.feature_scale * features
                 + condition_gate
-                + self.temporal_bias[..., :steps]
+                + self.temporal_bias[..., :steps]#门控大小公式
             )
         else:
             raise ValueError(f'unknown injection_type: {self.injection_type}')
 
         self.last_gate = gate.detach()
-        return features + self.injection_scale * gate * condition_current
+        return features + self.injection_scale * gate * condition_current#残差注入

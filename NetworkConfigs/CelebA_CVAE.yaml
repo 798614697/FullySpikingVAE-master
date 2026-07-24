@@ -23,6 +23,17 @@ Network:
   lambda_cond: 1.0 # MMD 权重；若改 KLD 通常应显著调小
   lambda_cc: 0.1 # CelebA 属性一致性
   lambda_temp: 0.1 # 条件-潜变量时间对齐
+  # 先预训练真实图属性分类器，保存验证 BCE 最优权重；后续 FSCVAE 训练中冻结。
+  classifier_pretrain_epochs: 10
+  classifier_lr: 0.0002
+  classifier_weight_decay: 0.0001
+  classifier_pos_weight_max: 10.0 # 稀有属性 neg/pos 权重上限
+  classifier_checkpoint: "checkpoint/celeba_attribute_classifier.pth"
+  # 两项生成约束独立 warm-up，避免训练初期压过重建/分布匹配目标。
+  cc_start_epoch: 0
+  cc_warmup_epochs: 10
+  temp_start_epoch: 5
+  temp_warmup_epochs: 15
 
   test_interval: 5
   sample_interval: 5

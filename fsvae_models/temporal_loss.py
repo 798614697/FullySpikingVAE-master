@@ -38,11 +38,10 @@ class TemporalConditionAlignmentLoss(nn.Module):
 
 
 class ConditionConsistencyClassifier(nn.Module):
-    """仅用于训练约束的 CelebA 40 属性辅助分类器。
+    """预训练后冻结、用于条件一致性约束的多标签属性分类器。
 
-    它不参与 FS-CVAE 的推理/生成主干。真实图像分支教它识别属性；重建图
-    和条件先验生成图分支把属性梯度传回生成模型。正式论文评估时更推荐
-    另外训练并冻结一个独立属性分类器，避免“生成器和裁判共同适应”。
+    预训练阶段使用真实图像学习属性；FSCVAE 主训练阶段冻结参数，但保持
+    对输入图像可导，使重建图和条件先验生成图的属性梯度传回生成模型。
     """
 
     def __init__(self, in_channels, condition_dim):

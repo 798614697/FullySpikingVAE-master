@@ -19,15 +19,15 @@ class TemporalConditionEncoder(nn.Module):
         self.mode = mode
         self.tau = tau
 
-        self.input_projection = nn.Linear(condition_dim, embed_dim)
+        self.input_projection = nn.Linear(condition_dim, embed_dim)#原始属性向量投影到神经网络使用的条件特征空间
         self.temporal_embedding = nn.Parameter(torch.empty(n_steps, embed_dim))
-        self.recurrent = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.input_norm = nn.LayerNorm(embed_dim)
-        nn.init.normal_(self.temporal_embedding, mean=0.0, std=0.02)
+        self.recurrent = nn.Linear(embed_dim, embed_dim, bias=False)#脉冲循环连接
+        self.input_norm = nn.LayerNorm(embed_dim)#输入归一化
+        nn.init.normal_(self.temporal_embedding, mean=0.0, std=0.02)#初始化
         nn.init.orthogonal_(self.recurrent.weight, gain=0.25)
 
     def forward(self, condition):
-        if condition.ndim != 2 or condition.shape[1] != self.condition_dim:
+        if condition.ndim != 2 or condition.shape[1] != self.condition_dim:#输入检查
             raise ValueError(
                 f'expected condition shape (B, {self.condition_dim}), '
                 f'got {tuple(condition.shape)}'
@@ -51,7 +51,7 @@ class TemporalConditionEncoder(nn.Module):
                 + self.temporal_embedding[t].unsqueeze(0)
                 + self.recurrent(previous_spike)
             )
-            membrane = self.tau * membrane * (1.0 - previous_spike) + current
+            membrane = self.tau * membrane * (1.0 - previous_spike) + current#膜电位更新
             previous_spike = SpikeAct.apply(membrane)
             condition_spikes.append(previous_spike)
 

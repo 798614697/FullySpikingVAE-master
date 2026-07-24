@@ -135,6 +135,9 @@ class FSCVAE(nn.Module):
         self._last_condition_sequence = None
         self._last_condition = None
         self._last_prior_generated = None
+        # 训练入口可按 epoch 更新这两个有效权重，实现独立 warm-up。
+        self.current_lambda_cc = float(glv.network_config.get('lambda_cc', 0.0))
+        self.current_lambda_temp = float(glv.network_config.get('lambda_temp', 0.0))
 
         if not self.condition_dim:
             return
@@ -158,6 +161,21 @@ class FSCVAE(nn.Module):
         self.condition_classifier = ConditionConsistencyClassifier(
             glv.network_config['in_channels'], self.condition_dim
         )
+
+    def freeze_condition_classifier(self):
+        """冻结预训练属性分类器，但保留对输入图像的梯度。"""
+        if self.condition_classifier is None:
+            return
+        self.condition_classifier.eval()
+        for parameter in self.condition_classifier.parameters():
+            parameter.requires_grad_(False)
+
+    def set_conditional_loss_weights(self, lambda_cc=None, lambda_temp=None):
+        """设置当前 epoch 使用的条件损失权重。"""
+        if lambda_cc is not None:
+            self.current_lambda_cc = float(lambda_cc)
+        if lambda_temp is not None:
+            self.current_lambda_temp = float(lambda_temp)
 
     def _prepare_condition(self, condition, batch_size, device, dtype):
         """检查条件形状，并兼容 CelebA 属性的 {-1,1} 或 {0,1} 表示。"""
@@ -188,7 +206,7 @@ class FSCVAE(nn.Module):
         # lambda_cc>0 时额外构造一张“条件先验潜变量率”生成图，供属性一致性
         # 损失监督。只在训练阶段做，避免普通测试前向增加一倍解码开销。
         use_cc_prior = (self.training and self.condition_dim
-                        and float(glv.network_config.get('lambda_cc', 0.0)) > 0)
+                        and self.current_lambda_cc > 0)
         if use_cc_prior:
             # p_z is a k-member Bernoulli population. Its mean is a
             # differentiable conditional-prior latent rate used for the
@@ -264,14 +282,10 @@ class FSCVAE(nn.Module):
             return zero, zero
 
         cc_loss = zero
-        if float(glv.network_config.get('lambda_cc', 0.0)) > 0:
-            # The real-image term trains the auxiliary classifier; the
-            # reconstruction term also sends attribute gradients to FS-CVAE.
-            real_logits = self.condition_classifier(input_img.detach())
+        if self.current_lambda_cc > 0:
+            # 分类器已在主训练前用真实图预训练并冻结；这里仅用它监督生成主干。
             recon_logits = self.condition_classifier(recons_img)
-            # real 项训练分类器；recon/prior 项既训练分类器，也向生成主干传梯度。
             terms = [
-                F.binary_cross_entropy_with_logits(real_logits, self._last_condition),
                 F.binary_cross_entropy_with_logits(recon_logits, self._last_condition),
             ]
             if self._last_prior_generated is not None:
@@ -282,7 +296,7 @@ class FSCVAE(nn.Module):
             cc_loss = torch.stack(terms).mean()
 
         temp_loss = zero
-        if float(glv.network_config.get('lambda_temp', 0.0)) > 0:
+        if self.current_lambda_temp > 0:
             temp_loss = self.temporal_alignment(
                 self._last_condition_sequence, latent_prob
             )
@@ -305,8 +319,8 @@ class FSCVAE(nn.Module):
         )
         loss = (recons_loss
                 + float(glv.network_config.get('lambda_cond', 1.0)) * mmd_loss
-                + float(glv.network_config.get('lambda_cc', 0.0)) * cc_loss
-                + float(glv.network_config.get('lambda_temp', 0.0)) * temp_loss)
+                + self.current_lambda_cc * cc_loss
+                + self.current_lambda_temp * temp_loss)
         return {'loss': loss, 'Reconstruction_Loss':recons_loss,
                 'Distance_Loss': mmd_loss, 'Condition_Loss': cc_loss,
                 'Temporal_Loss': temp_loss}
@@ -330,8 +344,8 @@ class FSCVAE(nn.Module):
         )
         cond_weight = float(glv.network_config.get('lambda_cond', 1e-4))
         loss = (recons_loss + cond_weight * kld_loss
-                + float(glv.network_config.get('lambda_cc', 0.0)) * cc_loss
-                + float(glv.network_config.get('lambda_temp', 0.0)) * temp_loss)
+                + self.current_lambda_cc * cc_loss
+                + self.current_lambda_temp * temp_loss)
         return {'loss': loss, 'Reconstruction_Loss':recons_loss,
                 'Distance_Loss': kld_loss, 'Condition_Loss': cc_loss,
                 'Temporal_Loss': temp_loss}
