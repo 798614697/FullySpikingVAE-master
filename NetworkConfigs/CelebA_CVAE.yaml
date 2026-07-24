@@ -9,7 +9,7 @@ Network:
   lr: 0.001
   latent_dim: 128
   input_size: 64
-  model: "FSVAE_large"
+  model: "FSCVAE_large"
   # FS-CVAE 条件分支：40 个静态属性先编码成 64xT 条件脉冲。
   conditional: true
   condition_dim: 40 # CelebA 全部二值属性

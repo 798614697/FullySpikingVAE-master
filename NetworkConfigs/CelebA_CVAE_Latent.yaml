@@ -10,7 +10,7 @@ Network:
   lr: 0.001
   latent_dim: 128
   input_size: 64
-  model: "FSVAE_large"
+  model: "FSCVAE_large"
   conditional: true
   condition_dim: 40
   condition_embed_dim: 64

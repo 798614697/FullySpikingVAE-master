@@ -15,16 +15,16 @@ from datasets import load_dataset_snn
 from utils import aboutCudaDevices
 from utils import AverageMeter
 from utils import CountMulAddSNN
-import fsvae_models.fsvae as fsvae
+import fsvae_models.fscvae as fscvae
 from fsvae_models.snn_layers import LIFSpike
 import metrics.inception_score as inception_score
 import metrics.clean_fid as clean_fid
 import metrics.autoencoder_fid as autoencoder_fid
 
-"""FSVAE/FS-CVAE 实验入口。
+"""FSCVAE 实验入口。
 
 本文件不定义网络层，负责把配置、数据、模型、损失、优化器、评估和保存
-串成完整训练流程。核心模型结构在 fsvae_models/fsvae.py。
+串成完整训练流程。核心模型结构在 fsvae_models/fscvae.py。
 """
 
 
@@ -358,10 +358,10 @@ if __name__ == '__main__':
     if network_config.get('conditional', False):
         _, sample_conditions = next(iter(test_loader))
 
-    if network_config['model'] == 'FSVAE':
-        net = fsvae.FSVAE()
-    elif network_config['model'] == 'FSVAE_large':
-        net = fsvae.FSVAELarge()
+    if network_config['model'] in ('FSCVAE', 'FSVAE'):
+        net = fscvae.FSCVAE()
+    elif network_config['model'] in ('FSCVAE_large', 'FSVAE_large'):
+        net = fscvae.FSCVAELarge()
     else:
         raise Exception('not defined model')
 

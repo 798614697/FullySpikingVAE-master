@@ -1,5 +1,5 @@
-# Fully Spiking Variational Autoencoder
-official implementation of Fully Spiking Variational Autoencoder
+# Fully Spiking Conditional Variational Autoencoder (FSCVAE)
+Implementation of the Fully Spiking Conditional Variational Autoencoder.
 
 Accepted to **AAAI2022**!!
 
@@ -24,7 +24,7 @@ python init_fid_stats.py
 ```
 
 # Demo
-The following command calculates the Inception score & FID of FSVAE trained on CelebA. After that, it outputs `demo_input.png`, `demo_recons.png`, and `demo_sample.png`.
+The following command calculates the Inception score & FID of FSCVAE trained on CelebA. After that, it outputs `demo_input.png`, `demo_recons.png`, and `demo_sample.png`.
 ```
 python demo.py
 ```
@@ -33,19 +33,19 @@ If CelebA cannot be downloaded, you can still generate samples from the demo che
 python demo.py --sample-only --skip-metrics
 ```
 
-# Training Fully Spiking VAE
+# Training FSCVAE
 ```
 python main_fsvae exp_name -config NetworkConfigs/dataset_name.yaml
 ```
 
-To train the conditional FSVAE on CelebA, using all 40 CelebA attributes as the
+To train FSCVAE on CelebA, using all 40 CelebA attributes as the
 condition for the posterior, autoregressive prior, and decoder, run:
 
 ```bash
 python main_fsvae.py celeba_cvae -config NetworkConfigs/CelebA_CVAE.yaml
 ```
 
-The FS-CVAE condition is not concatenated with every time step. A recurrent LIF
+The FSCVAE condition is not concatenated with every time step. A recurrent LIF
 condition encoder produces condition spikes `c_1:T`; time-selective gates then
 modulate the encoder current, posterior, conditional prior, and decoder. The
 three ablation configurations are:
