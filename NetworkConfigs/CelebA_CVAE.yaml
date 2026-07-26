@@ -1,12 +1,15 @@
 Network:
   # 数据与基础 FSVAE 结构；公平对比时应与 CelebA.yaml 保持一致。
-  epochs: 150
-  batch_size: 250
+  epochs: 100
+  batch_size: 128
   n_steps: 16
   dataset: "CelebA"
   in_channels: 3
   data_path: "./data"
   lr: 0.001
+  # epoch 0-29 使用 1e-3，从 epoch 30 起使用 1e-4，之后保持不变。
+  lr_decay_epochs: [30]
+  lr_decay_gamma: 0.1
   latent_dim: 128
   input_size: 64
   model: "FSCVAE_large"

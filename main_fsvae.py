@@ -198,6 +198,21 @@ def update_conditional_loss_weights(network, epoch):
     writer.add_scalar('Train/lambda_temp_effective', temp_weight, epoch)
     return cc_weight, temp_weight
 
+
+def build_lr_scheduler(optimizer):
+    """构造可选的 MultiStep 学习率衰减；空 milestones 表示保持恒定学习率。"""
+    milestones = [int(epoch) for epoch in config_value('lr_decay_epochs', [])]
+    if not milestones:
+        return None
+    if milestones != sorted(set(milestones)) or any(epoch <= 0 for epoch in milestones):
+        raise ValueError('lr_decay_epochs must be sorted, unique positive epochs')
+    gamma = float(config_value('lr_decay_gamma', 0.1))
+    if not 0.0 < gamma < 1.0:
+        raise ValueError('lr_decay_gamma must be between 0 and 1')
+    return torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=milestones, gamma=gamma
+    )
+
 def train(network, trainloader, opti, epoch):
     # FSVAE 的训练循环：静态图像会被复制到 T 个时间步，形成 (N,C,H,W,T)。
     n_steps = glv.network_config['n_steps']
@@ -522,11 +537,16 @@ if __name__ == '__main__':
                                 lr=glv.network_config['lr'], 
                                 betas=(0.9, 0.999), 
                                 weight_decay=0.001)
+    lr_scheduler = build_lr_scheduler(optimizer)
     
     best_loss = 1e8
     # 每个 epoch 的顺序：可选权重直方图 -> scheduled p -> train -> test
     # -> 保存 -> 条件采样 -> 可选昂贵生成指标。
     for e in range(glv.network_config['epochs']):
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f'Learning rate: {current_lr:.8g}')
+        logging.info(f'Epoch [{e}] learning rate: {current_lr:.8g}')
+        writer.add_scalar('Train/learning_rate', current_lr, e)
         cc_weight, temp_weight = update_conditional_loss_weights(net, e)
         print(f'Conditional weights: lambda_cc={cc_weight:.5f}, '
               f'lambda_temp={temp_weight:.5f}')
@@ -559,5 +579,9 @@ if __name__ == '__main__':
                 calc_autoencoder_frechet_distance(net, e)
             if config_value('enable_clean_fid', True):
                 calc_clean_fid(net, e)
+
+        # 在 epoch 末尾更新，使 milestone=30 表示从第 30 个零基 epoch 起使用新学习率。
+        if lr_scheduler is not None:
+            lr_scheduler.step()
         
     writer.close()
