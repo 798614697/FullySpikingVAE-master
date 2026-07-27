@@ -3,6 +3,7 @@ import os.path
 import numpy as np
 import logging
 import argparse
+import random
 
 import torch
 import torchvision
@@ -213,6 +214,80 @@ def build_lr_scheduler(optimizer):
         optimizer, milestones=milestones, gamma=gamma
     )
 
+
+def atomic_torch_save(value, path):
+    """先写同目录临时文件再原子替换，避免中断留下半个 checkpoint。"""
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    temporary_path = path + '.tmp'
+    torch.save(value, temporary_path)
+    os.replace(temporary_path, path)
+
+
+def training_state(network, optimizer, scheduler, epoch,
+                   best_fixed_objective, best_epoch):
+    """构造可从下一个 epoch 精确恢复的完整训练状态。"""
+    state = {
+        'format_version': 2,
+        'epoch': int(epoch),
+        'model': network.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'scheduler': scheduler.state_dict() if scheduler is not None else None,
+        'best_fixed_objective': float(best_fixed_objective),
+        'best_epoch': int(best_epoch),
+        'scheduled_sampling_p': float(network.p),
+        'network_config': dict(glv.network_config),
+        'python_rng_state': random.getstate(),
+        'numpy_rng_state': np.random.get_state(),
+        'torch_rng_state': torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state['cuda_rng_state_all'] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def validate_resume_config(saved_config, current_config):
+    """阻止用结构或训练超参数不兼容的配置伪装成精确续训。"""
+    keys = (
+        'batch_size', 'n_steps', 'dataset', 'in_channels', 'latent_dim',
+        'input_size', 'model', 'k', 'scheduled', 'loss_func', 'lr',
+        'conditional', 'condition_dim', 'condition_embed_dim',
+        'temporal_condition_mode', 'injection_type', 'lambda_cond',
+        'lambda_cc', 'lambda_temp', 'cc_start_epoch', 'cc_warmup_epochs',
+        'temp_start_epoch', 'temp_warmup_epochs', 'lr_decay_epochs',
+        'lr_decay_gamma',
+    )
+    mismatches = []
+    for key in keys:
+        if saved_config.get(key) != current_config.get(key):
+            mismatches.append(
+                f'{key}: saved={saved_config.get(key)!r}, '
+                f'current={current_config.get(key)!r}'
+            )
+    if mismatches:
+        raise ValueError(
+            'resume config does not match saved training state:\n  '
+            + '\n  '.join(mismatches)
+        )
+
+
+def restore_rng_state(state):
+    random.setstate(state['python_rng_state'])
+    np.random.set_state(state['numpy_rng_state'])
+    torch.set_rng_state(state['torch_rng_state'].cpu())
+    if torch.cuda.is_available() and 'cuda_rng_state_all' in state:
+        torch.cuda.set_rng_state_all(
+            [rng_state.cpu() for rng_state in state['cuda_rng_state_all']]
+        )
+
+
+def load_training_state(path, device):
+    """完整训练状态包含 Python/NumPy 对象，不能按 weights-only 模式读取。"""
+    try:
+        return torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        # 兼容尚未提供 weights_only 参数的旧 PyTorch。
+        return torch.load(path, map_location=device)
+
 def train(network, trainloader, opti, epoch):
     # FSVAE 的训练循环：静态图像会被复制到 T 个时间步，形成 (N,C,H,W,T)。
     n_steps = glv.network_config['n_steps']
@@ -312,6 +387,8 @@ def test(network, testloader, epoch):
     dist_meter = AverageMeter()
     condition_meter = AverageMeter()
     temporal_meter = AverageMeter()
+    target_cc_weight = float(config_value('lambda_cc', 0.0))
+    target_temp_weight = float(config_value('lambda_temp', 0.0))
 
     mean_q_z = 0
     mean_p_z = 0
@@ -333,9 +410,17 @@ def test(network, testloader, epoch):
             x_recon, q_z, p_z, sampled_z = network(spike_input, condition=condition, scheduled=network_config['scheduled'])
 
             if network_config['loss_func'] == 'mmd':
-                losses = network.loss_function_mmd(real_img, x_recon, q_z, p_z)
+                losses = network.loss_function_mmd(
+                    real_img, x_recon, q_z, p_z,
+                    compute_cc=target_cc_weight > 0,
+                    compute_temp=target_temp_weight > 0,
+                )
             elif network_config['loss_func'] == 'kld':
-                losses = network.loss_function_kld(real_img, x_recon, q_z, p_z)
+                losses = network.loss_function_kld(
+                    real_img, x_recon, q_z, p_z,
+                    compute_cc=target_cc_weight > 0,
+                    compute_temp=target_temp_weight > 0,
+                )
             else:
                 raise ValueError('unrecognized loss function')
 
@@ -359,12 +444,26 @@ def test(network, testloader, epoch):
                 writer.add_images('Test/recons_img', (x_recon+1)/2, epoch)
                 
 
-    logging.info(f"Test [{epoch}] Loss: {loss_meter.avg} ReconsLoss: {recons_meter.avg} DISTANCE: {dist_meter.avg}")
+    distance_weight = float(config_value(
+        'lambda_cond', 1.0 if network_config['loss_func'] == 'mmd' else 1e-4
+    ))
+    fixed_objective = (
+        recons_meter.avg
+        + distance_weight * dist_meter.avg
+        + target_cc_weight * condition_meter.avg
+        + target_temp_weight * temporal_meter.avg
+    )
+    logging.info(
+        f"Test [{epoch}] Loss: {loss_meter.avg} FixedObjective: {fixed_objective} "
+        f"ReconsLoss: {recons_meter.avg} DISTANCE: {dist_meter.avg} "
+        f"CC: {condition_meter.avg} TEMP: {temporal_meter.avg}"
+    )
     writer.add_scalar('Test/loss', loss_meter.avg, epoch)
     writer.add_scalar('Test/recons_loss', recons_meter.avg, epoch)
     writer.add_scalar('Test/distance', dist_meter.avg, epoch)
     writer.add_scalar('Test/condition_consistency', condition_meter.avg, epoch)
     writer.add_scalar('Test/temporal_alignment', temporal_meter.avg, epoch)
+    writer.add_scalar('Test/fixed_objective', fixed_objective, epoch)
     writer.add_scalar('Test/latent_firing_rate', mean_sampled_z.mean().item(), epoch)
     writer.add_scalar('Test/mean_q', mean_q_z.mean().item(), epoch)
     writer.add_scalar('Test/mean_p', mean_p_z.mean().item(), epoch)
@@ -380,7 +479,14 @@ def test(network, testloader, epoch):
     writer.add_image(f'Test/mean_q_z', mean_q_z.mean(0).unsqueeze(0))
     writer.add_image(f'Test/mean_p_z', mean_p_z.mean(0).unsqueeze(0))
 
-    return loss_meter.avg
+    return {
+        'loss': loss_meter.avg,
+        'fixed_objective': fixed_objective,
+        'reconstruction': recons_meter.avg,
+        'distance': dist_meter.avg,
+        'condition': condition_meter.avg,
+        'temporal': temporal_meter.avg,
+    }
 
 def sample(network, epoch, batch_size=128, condition=None):
     # 从先验 p(z_t | z_<t) 自回归采样潜变量，再经解码器生成图像。
@@ -440,7 +546,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('name', type=str)
     parser.add_argument('-config', action='store', dest='config', help='The path of config file')
-    parser.add_argument('-checkpoint', action='store', dest='checkpoint', help='The path of checkpoint, if use checkpoint')
+    parser.add_argument('-checkpoint', action='store', dest='checkpoint',
+                        help='Load model weights only (warm start)')
+    parser.add_argument('-resume', action='store', dest='resume',
+                        help='Resume an exact epoch-boundary training_state.pth')
     parser.add_argument('-device', type=int)
 
     try:
@@ -451,6 +560,8 @@ if __name__ == '__main__':
 
     if args.config is None:
         raise Exception('Unrecognized config file.')
+    if args.checkpoint is not None and args.resume is not None:
+        raise ValueError('-checkpoint and -resume are mutually exclusive')
 
     # 当前训练脚本明确要求 CUDA；demo.py 另外支持 CPU 推理。
     if args.device is None:
@@ -520,15 +631,28 @@ if __name__ == '__main__':
 
     net = net.to(init_device)
     
-    # checkpoint 只保存 state_dict，不含 optimizer/epoch，因此这里适合加载
-    # 同结构模型权重，但不能完整恢复 AdamW 动量和训练轮数。
+    resume_state = None
     if args.checkpoint is not None:
-        checkpoint_path = args.checkpoint
-        checkpoint = torch.load(checkpoint_path)
-        net.load_state_dict(checkpoint)    
+        checkpoint = torch.load(args.checkpoint, map_location=init_device)
+        net.load_state_dict(checkpoint)
+        print(f'Loaded model weights (warm start): {args.checkpoint}')
+    elif args.resume is not None:
+        resume_state = load_training_state(args.resume, init_device)
+        if not isinstance(resume_state, dict) or 'model' not in resume_state:
+            raise ValueError('-resume requires a training_state.pth, not a weights-only checkpoint')
+        if int(resume_state.get('format_version', 0)) != 2:
+            raise ValueError('unsupported training state format')
+        validate_resume_config(
+            resume_state.get('network_config', {}), glv.network_config
+        )
+        net.load_state_dict(resume_state['model'])
 
     if net.condition_dim and float(config_value('lambda_cc', 0.0)) > 0:
-        pretrain_condition_classifier(net, train_loader, test_loader)
+        if resume_state is not None:
+            # 分类器权重已包含在 model state 中；只恢复冻结状态，不能重新预训练。
+            net.freeze_condition_classifier()
+        else:
+            pretrain_condition_classifier(net, train_loader, test_loader)
 
     # 冻结参数不交给主优化器，避免无意义的优化器状态和权重衰减。
     trainable_parameters = [parameter for parameter in net.parameters()
@@ -538,11 +662,33 @@ if __name__ == '__main__':
                                 betas=(0.9, 0.999), 
                                 weight_decay=0.001)
     lr_scheduler = build_lr_scheduler(optimizer)
-    
-    best_loss = 1e8
+
+    start_epoch = 0
+    best_fixed_objective = float('inf')
+    best_epoch = -1
+    if resume_state is not None:
+        optimizer.load_state_dict(resume_state['optimizer'])
+        saved_scheduler = resume_state.get('scheduler')
+        if (lr_scheduler is None) != (saved_scheduler is None):
+            raise ValueError('resume scheduler does not match the current configuration')
+        if lr_scheduler is not None:
+            lr_scheduler.load_state_dict(saved_scheduler)
+        start_epoch = int(resume_state['epoch']) + 1
+        best_fixed_objective = float(resume_state['best_fixed_objective'])
+        best_epoch = int(resume_state.get('best_epoch', -1))
+        net.p = float(resume_state.get('scheduled_sampling_p', net.p))
+        restore_rng_state(resume_state)
+        message = (
+            f'Resumed exact training state from {args.resume}: '
+            f'next_epoch={start_epoch}, best_epoch={best_epoch}, '
+            f'best_fixed_objective={best_fixed_objective:.8f}'
+        )
+        print(message)
+        logging.info(message)
+
     # 每个 epoch 的顺序：可选权重直方图 -> scheduled p -> train -> test
-    # -> 保存 -> 条件采样 -> 可选昂贵生成指标。
-    for e in range(glv.network_config['epochs']):
+    # -> 条件采样/指标 -> scheduler -> 原子保存完整训练状态。
+    for e in range(start_epoch, glv.network_config['epochs']):
         current_lr = optimizer.param_groups[0]['lr']
         print(f'Learning rate: {current_lr:.8g}')
         logging.info(f'Epoch [{e}] learning rate: {current_lr:.8g}')
@@ -559,14 +705,13 @@ if __name__ == '__main__':
             logging.info("update p")
         train_loss = train(net, train_loader, optimizer, e)
 
+        is_best = False
         if should_run(e, config_value('test_interval', 1)):
-            test_loss = test(net, test_loader, e)
-            if test_loss < best_loss:
-                best_loss = test_loss
-                torch.save(net.state_dict(), f'checkpoint/{args.name}/best.pth')
-
-        if should_run(e, config_value('checkpoint_interval', 1)):
-            torch.save(net.state_dict(), f'checkpoint/{args.name}/checkpoint.pth')
+            test_metrics = test(net, test_loader, e)
+            if test_metrics['fixed_objective'] < best_fixed_objective:
+                best_fixed_objective = test_metrics['fixed_objective']
+                best_epoch = e
+                is_best = True
 
         if should_run(e, config_value('sample_interval', 1)):
             sample(net, e, batch_size=config_value('sample_batch_size', 128),
@@ -583,5 +728,29 @@ if __name__ == '__main__':
         # 在 epoch 末尾更新，使 milestone=30 表示从第 30 个零基 epoch 起使用新学习率。
         if lr_scheduler is not None:
             lr_scheduler.step()
+
+        if is_best:
+            atomic_torch_save(
+                net.state_dict(), f'checkpoint/{args.name}/best.pth'
+            )
+            atomic_torch_save(
+                training_state(net, optimizer, lr_scheduler, e,
+                               best_fixed_objective, best_epoch),
+                f'checkpoint/{args.name}/best_training_state.pth',
+            )
+            logging.info(
+                f'new best fixed objective at epoch {e}: '
+                f'{best_fixed_objective}'
+            )
+
+        if should_run(e, config_value('checkpoint_interval', 1)):
+            atomic_torch_save(
+                net.state_dict(), f'checkpoint/{args.name}/checkpoint.pth'
+            )
+            atomic_torch_save(
+                training_state(net, optimizer, lr_scheduler, e,
+                               best_fixed_objective, best_epoch),
+                f'checkpoint/{args.name}/training_state.pth',
+            )
         
     writer.close()

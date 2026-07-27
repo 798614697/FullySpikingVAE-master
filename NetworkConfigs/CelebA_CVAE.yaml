@@ -1,7 +1,8 @@
 Network:
   # 数据与基础 FSVAE 结构；公平对比时应与 CelebA.yaml 保持一致。
   epochs: 100
-  batch_size: 128
+  # 完整模型的 CC 分支会联合解码 2B 张图；64 可控制 RTX 5090 的反传峰值。
+  batch_size: 64
   n_steps: 16
   dataset: "CelebA"
   in_channels: 3

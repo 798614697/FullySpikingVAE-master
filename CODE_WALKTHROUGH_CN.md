@@ -243,10 +243,14 @@ BCE。真实图教会分类器识别属性，另外两条路径把属性监督�
 |---|---|
 | `CelebA.yaml` | 原始无条件 FSVAE |
 | `CelebA_CVAE_Latent.yaml` | 静态投影、始终开门、无新增损失 |
+| `CelebA_CVAE_Temporal_Additive.yaml` | LIF 时间编码、直接相加、无新增损失（隔离门控作用） |
 | `CelebA_CVAE_Temporal.yaml` | LIF 条件时间编码和软门控、无新增损失 |
 | `CelebA_CVAE.yaml` | 时间编码、软门控和全部提出损失 |
 
-只有逐级消融优于前一级，才能证明时间编码、选择性注入和新增损失各自有效。
+`Latent -> Temporal_Additive` 隔离时间编码作用，
+`Temporal_Additive -> Temporal` 隔离软门控作用，
+`Temporal -> Full` 隔离新增损失作用。只有统一训练设置并逐级比较，
+才能证明时间编码、选择性注入和新增损失各自有效。
 
 ## 13. TensorBoard 中看什么
 

@@ -48,9 +48,11 @@ python main_fsvae.py celeba_cvae -config NetworkConfigs/CelebA_CVAE.yaml
 The FSCVAE condition is not concatenated with every time step. A recurrent LIF
 condition encoder produces condition spikes `c_1:T`; time-selective gates then
 modulate the encoder current, posterior, conditional prior, and decoder. The
-three ablation configurations are:
+ablation configurations are:
 
 - `CelebA_CVAE_Latent.yaml`: static projected condition, no proposed losses.
+- `CelebA_CVAE_Temporal_Additive.yaml`: LIF temporal encoding with direct
+  additive injection, isolating the temporal encoder from the gate.
 - `CelebA_CVAE_Temporal.yaml`: LIF temporal encoding and gates, no proposed losses.
 - `CelebA_CVAE.yaml`: temporal model plus consistency/alignment losses.
 
@@ -63,8 +65,25 @@ Training settings are defined in `NetworkConfigs/*.yaml`.
 args:
 - name: [required] experiment name
 - config: [required] config file path
-- checkpoint: checkpoint path (if use pretrained model) 
+- checkpoint: weights-only checkpoint path for a warm start
+- resume: `training_state.pth` path for exact epoch-boundary resume
 - device: device id of gpu, default 0
+
+Training writes both compatibility weights and resumable state:
+
+- `checkpoint.pth` / `best.pth`: model weights only, used by evaluation scripts.
+- `training_state.pth` / `best_training_state.pth`: model, optimizer,
+  scheduler, epoch, best fixed validation objective, scheduled-sampling state,
+  and random-number-generator states.
+
+Example exact resume (the configuration must match; `epochs` may be extended):
+
+```bash
+python main_fsvae.py celeba_cvae \
+  -config NetworkConfigs/CelebA_CVAE.yaml \
+  -resume checkpoint/celeba_cvae/training_state.pth \
+  -device 0
+```
 
 You can watch the logs with below command and access http://localhost:8009/ 
 

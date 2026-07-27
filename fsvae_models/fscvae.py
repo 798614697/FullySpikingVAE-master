@@ -275,14 +275,15 @@ class FSCVAE(nn.Module):
         sampled_x = self.decode(sampled_z, condition_sequence)
         return sampled_x, sampled_z
 
-    def _extra_conditional_losses(self, input_img, recons_img, latent_prob):
+    def _extra_conditional_losses(self, input_img, recons_img, latent_prob,
+                                  compute_cc=False, compute_temp=False):
         """计算条件一致性 CC 和条件-潜变量时间对齐 TEMP 两项附加损失。"""
         zero = recons_img.new_zeros(())
         if not self.condition_dim:
             return zero, zero
 
         cc_loss = zero
-        if self.current_lambda_cc > 0:
+        if self.current_lambda_cc > 0 or compute_cc:
             # 分类器已在主训练前用真实图预训练并冻结；这里仅用它监督生成主干。
             recon_logits = self.condition_classifier(recons_img)
             terms = [
@@ -296,13 +297,14 @@ class FSCVAE(nn.Module):
             cc_loss = torch.stack(terms).mean()
 
         temp_loss = zero
-        if self.current_lambda_temp > 0:
+        if self.current_lambda_temp > 0 or compute_temp:
             temp_loss = self.temporal_alignment(
                 self._last_condition_sequence, latent_prob
             )
         return cc_loss, temp_loss
         
-    def loss_function_mmd(self, input_img, recons_img, q_z, p_z):
+    def loss_function_mmd(self, input_img, recons_img, q_z, p_z,
+                          compute_cc=False, compute_temp=False):
         """
         q_z is q(z|x): (N,latent_dim,k,T)
         p_z is p(z): (N,latent_dim,k,T)
@@ -315,7 +317,7 @@ class FSCVAE(nn.Module):
         # PSP 先对时间脉冲做突触后电位滤波，再匹配 q(z|x,y) 与 p(z|y)。
         mmd_loss = torch.mean((self.psp(q_z_ber)-self.psp(p_z_ber))**2)
         cc_loss, temp_loss = self._extra_conditional_losses(
-            input_img, recons_img, q_z_ber
+            input_img, recons_img, q_z_ber, compute_cc, compute_temp
         )
         loss = (recons_loss
                 + float(glv.network_config.get('lambda_cond', 1.0)) * mmd_loss
@@ -325,7 +327,8 @@ class FSCVAE(nn.Module):
                 'Distance_Loss': mmd_loss, 'Condition_Loss': cc_loss,
                 'Temporal_Loss': temp_loss}
 
-    def loss_function_kld(self, input_img, recons_img, q_z, p_z):
+    def loss_function_kld(self, input_img, recons_img, q_z, p_z,
+                          compute_cc=False, compute_temp=False):
         """
         q_z is q(z|x): (N,latent_dim,k,T)
         p_z is p(z): (N,latent_dim,k,T)
@@ -340,7 +343,7 @@ class FSCVAE(nn.Module):
         kld_loss = torch.mean(torch.sum(kld_loss, dim=(1,2)))
 
         cc_loss, temp_loss = self._extra_conditional_losses(
-            input_img, recons_img, prob_q
+            input_img, recons_img, prob_q, compute_cc, compute_temp
         )
         cond_weight = float(glv.network_config.get('lambda_cond', 1e-4))
         loss = (recons_loss + cond_weight * kld_loss

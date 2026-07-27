@@ -1,8 +1,8 @@
 Network:
   # 消融 Model 2：启用 LIF 时间条件和软门控，但关闭两项提出损失。
   # 与 Latent 配置比较时间机制，与完整 CVAE 配置比较新损失。
-  epochs: 150
-  batch_size: 250
+  epochs: 100
+  batch_size: 64
   n_steps: 16
   dataset: "CelebA"
   in_channels: 3

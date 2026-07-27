@@ -1,6 +1,6 @@
 Network:
-  # 消融 Model 1：条件经过可学习投影，但不产生 LIF 时间动态，门始终开启。
-  # 与 CelebA.yaml 比较说明“加入条件”本身的作用。
+  # 门控消融：保留 LIF 时间条件编码，但把软门控替换为直接相加。
+  # 与 CelebA_CVAE_Temporal.yaml 的唯一本质差异是 injection_type。
   epochs: 100
   batch_size: 64
   n_steps: 16
@@ -8,7 +8,6 @@ Network:
   in_channels: 3
   data_path: "./data"
   lr: 0.001
-  # 所有消融组使用相同调度，保证对比公平。
   lr_decay_epochs: [30]
   lr_decay_gamma: 0.1
   latent_dim: 128
@@ -17,14 +16,15 @@ Network:
   conditional: true
   condition_dim: 40
   condition_embed_dim: 64
-  temporal_condition_mode: 'static' # 同一个投影条件复制到 T 步
-  injection_type: 'additive' # gate=1，无时间选择性
+  temporal_condition_mode: 'lif'
+  injection_type: 'additive'
   k: 20
   scheduled: true
   loss_func: 'mmd'
   lambda_cond: 1.0
-  lambda_cc: 0.0 # 关闭提出的条件一致性损失
-  lambda_temp: 0.0 # 关闭提出的时间对齐损失
+  lambda_cc: 0.0
+  lambda_temp: 0.0
+
   test_interval: 5
   sample_interval: 5
   checkpoint_interval: 5
