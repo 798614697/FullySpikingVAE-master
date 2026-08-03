@@ -14,9 +14,11 @@ def init(n_config, devs):
     dtype = torch.float32
     devices = devs
     network_config = n_config
-    # 原实现按设备数缩放 batch size 和 lr，单卡时等于配置文件中的值。
+    # Batch size can still be interpreted per device.  Learning-rate scaling is
+    # opt-in so an experiment requesting 0.001 actually trains at 0.001.
     network_config['batch_size'] = network_config['batch_size'] * len(devices)
-    network_config['lr'] = network_config['lr'] * len(devices) * network_config['batch_size'] / 250
+    if network_config.get('scale_lr_by_batch', True):
+        network_config['lr'] = network_config['lr'] * len(devices) * network_config['batch_size'] / 250
     layer_config = {'threshold': 0.2}
     n_steps = network_config['n_steps']
     

@@ -70,6 +70,23 @@ args:
 # Evaluation
 ![results](imgs/results.png)
 
+## ASC-FSVAE conditional experiments
+
+The `experiment/fsvae-innovation` branch adds four controlled CelebA runs:
+
+- A: original FSVAE baseline.
+- B: true attributes condition both posterior and prior.
+- C: B plus a frozen image-attribute guidance loss.
+- D: C plus an auxiliary spiking attribute head on the image encoder.
+
+All configurations use an effective batch size of 64 (micro-batch 8), 100 epochs,
+seed 2024, and learning rates 0.001 for epochs 0--29 then 0.0001.  Pretrain the
+shared classifier and run the four experiments with `scripts/run_remote_screening.sh`.
+Conditional sampling requires a complete CelebA 40-attribute vector; it never
+falls back to a random condition. `evaluate_asc.py` computes reconstruction MSE
+and writes fixed-seed, single-attribute counterfactual grids for the six core
+attributes.
+
 # Reconstructed Images
 ![mnist_recons](imgs/mnist_recons_appendix.png)
 ![fashion_recons](imgs/fashion_recons_appendix.png)

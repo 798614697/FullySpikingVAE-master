@@ -116,4 +116,41 @@ def load_celebA(data_path):
     return trainloader, testloader
 
 
+def load_celeba_splits(data_path, batch_size=None, num_workers=8,
+                       pin_memory=True, download=False):
+    """Return the official CelebA train/valid/test splits with 0/1 attributes.
+
+    Training alone uses horizontal flipping.  Validation and test are fully
+    deterministic, which is required for checkpoint selection and paired
+    conditional sampling.
+    """
+    if batch_size is None:
+        batch_size = glv.network_config['batch_size']
+    input_size = glv.network_config['input_size']
+    set_range = transforms.Lambda(lambda image: 2 * image - 1.)
+    common = [transforms.CenterCrop(148), transforms.Resize((input_size, input_size)),
+              transforms.ToTensor(), set_range]
+    train_transform = transforms.Compose([transforms.RandomHorizontalFlip()] + common)
+    eval_transform = transforms.Compose(common)
+
+    datasets = {
+        'train': torchvision.datasets.CelebA(data_path, split='train',
+                                             target_type='attr', download=download,
+                                             transform=train_transform),
+        'valid': torchvision.datasets.CelebA(data_path, split='valid',
+                                             target_type='attr', download=download,
+                                             transform=eval_transform),
+        'test': torchvision.datasets.CelebA(data_path, split='test',
+                                            target_type='attr', download=download,
+                                            transform=eval_transform),
+    }
+    loaders = {}
+    for split, dataset in datasets.items():
+        loaders[split] = torch.utils.data.DataLoader(
+            dataset, batch_size=batch_size, shuffle=(split == 'train'),
+            num_workers=num_workers, pin_memory=pin_memory,
+            drop_last=(split == 'train'), persistent_workers=num_workers > 0)
+    return loaders, datasets['train'].attr_names
+
+
 
