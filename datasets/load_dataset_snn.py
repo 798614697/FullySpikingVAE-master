@@ -4,6 +4,16 @@ import torchvision.transforms as transforms
 import torch
 import global_v as glv
 
+
+def normalize_celeba_attr_names(attr_names, attribute_count):
+    """Remove blank metadata columns and verify alignment with the label tensor."""
+    names = [name for name in attr_names if name and name.strip()]
+    if len(names) != attribute_count:
+        raise ValueError(
+            f'CelebA metadata has {len(names)} named attributes but labels have '
+            f'{attribute_count} columns')
+    return names
+
 def load_mnist(data_path):
     print("loading MNIST")
     if not os.path.exists(data_path):
@@ -150,7 +160,9 @@ def load_celeba_splits(data_path, batch_size=None, num_workers=8,
             dataset, batch_size=batch_size, shuffle=(split == 'train'),
             num_workers=num_workers, pin_memory=pin_memory,
             drop_last=(split == 'train'), persistent_workers=num_workers > 0)
-    return loaders, datasets['train'].attr_names
+    attr_names = normalize_celeba_attr_names(
+        datasets['train'].attr_names, datasets['train'].attr.shape[1])
+    return loaders, attr_names
 
 
 

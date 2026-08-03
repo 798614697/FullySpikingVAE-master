@@ -2,6 +2,7 @@ import torch
 
 import global_v as glv
 from attribute_classifier import AttributeClassifier
+from datasets.load_dataset_snn import normalize_celeba_attr_names
 from fsvae_models.asc_fsvae import ASCFSVAELarge, normalize_attributes, spike_attribute_bce
 from fsvae_models.fsvae import FSVAELarge
 
@@ -69,3 +70,7 @@ def test_common_layers_have_identical_initialization():
         assert baseline_values.keys() == conditional_values.keys()
         assert all(torch.equal(value, conditional_values[name])
                    for name, value in baseline_values.items())
+
+
+def test_trailing_blank_celeba_attribute_name_is_removed():
+    assert normalize_celeba_attr_names(['Smiling', 'Male', ''], 2) == ['Smiling', 'Male']
