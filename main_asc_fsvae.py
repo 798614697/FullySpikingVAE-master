@@ -166,18 +166,25 @@ def main():
             model.update_p(epoch, config['epochs'])
         train_metrics = run_epoch(model, loaders['train'], args.experiment, device,
                                   config, pos_weight, classifier, optimizer)
-        # Evaluation has an isolated RNG so it cannot perturb the next training epoch.
-        with isolated_rng(args.seed + 50000 + epoch):
-            valid_metrics = run_epoch(model, loaders['valid'], args.experiment, device,
-                                      config, pos_weight, classifier)
+        validation_interval = int(config.get('validation_interval', 1))
+        should_validate = (epoch % validation_interval == 0
+                           or epoch == config['epochs'] - 1)
+        valid_metrics = None
+        if should_validate:
+            # Evaluation has an isolated RNG so it cannot perturb training RNG.
+            with isolated_rng(args.seed + 50000 + epoch):
+                valid_metrics = run_epoch(model, loaders['valid'], args.experiment, device,
+                                          config, pos_weight, classifier)
         used_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
         print(json.dumps({'epoch': epoch, 'lr': used_lr,
                           'train': train_metrics, 'valid': valid_metrics}), flush=True)
-        improved_total = valid_metrics['loss'] < best_total
-        improved_recon = valid_metrics['reconstruction'] < best_recon
-        best_total = min(best_total, valid_metrics['loss'])
-        best_recon = min(best_recon, valid_metrics['reconstruction'])
+        improved_total = valid_metrics is not None and valid_metrics['loss'] < best_total
+        improved_recon = (valid_metrics is not None
+                          and valid_metrics['reconstruction'] < best_recon)
+        if valid_metrics is not None:
+            best_total = min(best_total, valid_metrics['loss'])
+            best_recon = min(best_recon, valid_metrics['reconstruction'])
         payload = checkpoint_payload(model, optimizer, scheduler, epoch, best_total,
                                      best_recon, config, args.experiment, args.seed,
                                      attr_names, pos_weight)
@@ -186,10 +193,10 @@ def main():
             atomic_torch_save(payload, os.path.join(args.output_dir, 'best_total.pt'))
         if improved_recon:
             atomic_torch_save(payload, os.path.join(args.output_dir, 'best_reconstruction.pt'))
-        if (epoch + 1) % config.get('checkpoint_interval', 5) == 0:
+        if epoch % config.get('checkpoint_interval', 5) == 0:
             atomic_torch_save(payload, os.path.join(args.output_dir,
                                                     f'epoch_{epoch + 1:03d}.pt'))
-        if (epoch + 1) % config.get('sample_interval', 5) == 0:
+        if epoch % config.get('sample_interval', 5) == 0:
             save_samples(model, args.experiment, loaders['valid'], device,
                          args.output_dir, epoch + 1, args.seed, config['n_steps'])
 

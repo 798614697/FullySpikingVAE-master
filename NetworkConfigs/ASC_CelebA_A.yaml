@@ -1,7 +1,7 @@
 Network:
   epochs: 100
   batch_size: 64
-  micro_batch_size: 8
+  micro_batch_size: 64
   n_steps: 16
   dataset: CelebA
   in_channels: 3
@@ -25,4 +25,5 @@ Network:
   lambda_spike_attribute: 0.1
   pos_weight_cap: 10.0
   checkpoint_interval: 5
+  validation_interval: 5
   sample_interval: 5
