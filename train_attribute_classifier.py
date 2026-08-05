@@ -7,7 +7,8 @@ import torch.nn.functional as F
 import yaml
 
 import global_v as glv
-from asc_utils import atomic_torch_save, celeba_pos_weight, seed_everything
+from asc_utils import (atomic_torch_save, celeba_pos_weight,
+                       load_trusted_checkpoint, seed_everything)
 from attribute_classifier import AttributeClassifier
 from datasets.load_dataset_snn import load_celeba_splits
 
@@ -69,7 +70,7 @@ def main():
     best = float('inf')
     start_epoch = 0
     if args.resume:
-        state = torch.load(args.resume, map_location=device)
+        state = load_trusted_checkpoint(args.resume, device)
         model.load_state_dict(state['model'])
         optimizer.load_state_dict(state['optimizer'])
         start_epoch = state['epoch'] + 1

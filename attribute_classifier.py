@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from asc_utils import load_trusted_checkpoint
+
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
@@ -38,7 +40,7 @@ class AttributeClassifier(nn.Module):
 
 
 def load_frozen_classifier(path, device):
-    checkpoint = torch.load(path, map_location=device)
+    checkpoint = load_trusted_checkpoint(path, device)
     model = AttributeClassifier(len(checkpoint['attr_names'])).to(device)
     model.load_state_dict(checkpoint['model'])
     model.eval()

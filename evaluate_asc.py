@@ -9,7 +9,7 @@ import torchvision
 import yaml
 
 import global_v as glv
-from asc_utils import isolated_rng, seed_everything
+from asc_utils import isolated_rng, load_trusted_checkpoint, seed_everything
 from datasets.load_dataset_snn import load_celeba_splits
 from fsvae_models.asc_fsvae import ASCFSVAELarge, normalize_attributes
 from fsvae_models.fsvae import FSVAELarge
@@ -20,7 +20,7 @@ HAIR_ATTRIBUTES = ('Black_Hair', 'Blond_Hair', 'Brown_Hair', 'Gray_Hair')
 
 
 def load_model(checkpoint_path, experiment, device):
-    state = torch.load(checkpoint_path, map_location=device)
+    state = load_trusted_checkpoint(checkpoint_path, device)
     model = FSVAELarge() if experiment == 'A' else ASCFSVAELarge(
         use_encoder_attribute_head=(experiment == 'D'))
     model.load_state_dict(state['model'])

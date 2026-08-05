@@ -48,6 +48,15 @@ def atomic_torch_save(payload, path):
     os.replace(temporary, path)
 
 
+def load_trusted_checkpoint(path, map_location):
+    """Load a checkpoint produced by this training pipeline.
+
+    Resume files include Python and NumPy RNG state, so they are intentionally
+    not weights-only checkpoints. Never use this helper for untrusted files.
+    """
+    return torch.load(path, map_location=map_location, weights_only=False)
+
+
 def celeba_pos_weight(dataset, cap=10.0):
     targets = dataset.attr.float()
     targets = (targets > 0).float()

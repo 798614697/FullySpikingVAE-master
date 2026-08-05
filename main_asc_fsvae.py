@@ -9,7 +9,8 @@ import yaml
 
 import global_v as glv
 from asc_utils import (atomic_torch_save, celeba_pos_weight, isolated_rng,
-                       restore_rng_state, rng_state, seed_everything)
+                       load_trusted_checkpoint, restore_rng_state, rng_state,
+                       seed_everything)
 from attribute_classifier import load_frozen_classifier
 from datasets.load_dataset_snn import load_celeba_splits
 from fsvae_models.asc_fsvae import ASCFSVAELarge, normalize_attributes, spike_attribute_bce
@@ -151,7 +152,9 @@ def main():
     start_epoch = 0
     best_total = best_recon = float('inf')
     if args.resume:
-        state = torch.load(args.resume, map_location=device)
+        # RNG snapshots must remain CPU ByteTensors; model/optimizer loaders copy
+        # their tensors onto the already-created CUDA parameters as needed.
+        state = load_trusted_checkpoint(args.resume, 'cpu')
         model.load_state_dict(state['model'])
         optimizer.load_state_dict(state['optimizer'])
         scheduler.load_state_dict(state['scheduler'])
